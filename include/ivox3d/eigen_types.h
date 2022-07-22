@@ -62,6 +62,7 @@ inline bool less_vec<3>::operator()(const Eigen::Matrix<int, 3, 1>& v1, const Ei
     return v1[0] < v2[0] || (v1[0] == v2[0] && v1[1] < v2[1]) && (v1[0] == v2[0] && v1[1] == v2[1] && v1[2] < v2[2]);
 }
 
+// 将eigen的三维数据通过哈希函数映射为哈系值
 /// vec 2 hash
 /// @see Optimized Spatial Hashing for Collision Detection of Deformable Objects, Matthias Teschner et. al., VMV 2003
 template <>

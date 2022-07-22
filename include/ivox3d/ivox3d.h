@@ -34,11 +34,12 @@ struct IVoxNodeTypeTraits<IVoxNodeType::PHC, PointT, dim> {
     using NodeType = IVoxNodePhc<PointT, dim>;
 };
 
+//核心 IVox
 template <int dim = 3, IVoxNodeType node_type = IVoxNodeType::DEFAULT, typename PointType = pcl::PointXYZ>
 class IVox {
    public:
-    using KeyType = Eigen::Matrix<int, dim, 1>;
-    using PtType = Eigen::Matrix<float, dim, 1>;
+    using KeyType = Eigen::Matrix<int, dim, 1>; //voxel的xyz索引
+    using PtType = Eigen::Matrix<float, dim, 1>; //点的坐标
     using NodeType = typename IVoxNodeTypeTraits<node_type, PointType, dim>::NodeType;
     using PointVector = std::vector<PointType, Eigen::aligned_allocator<PointType>>;
     using DistPoint = typename NodeType::DistPoint;
@@ -94,14 +95,15 @@ class IVox {
     /// generate the nearby grids according to the given options
     void GenerateNearbyGrids();
 
-    /// position to grid
+    /// position to grid，返回三维位置对应的栅格坐标
     KeyType Pos2Grid(const PtType& pt) const;
 
     Options options_;
+    //将一个eigen矩阵映射为一个缓存内的pair数据结构<KeyType, NodeType>
     std::unordered_map<KeyType, typename std::list<std::pair<KeyType, NodeType>>::iterator, hash_vec<dim>>
         grids_map_;                                        // voxel hash map
-    std::list<std::pair<KeyType, NodeType>> grids_cache_;  // voxel cache
-    std::vector<KeyType> nearby_grids_;                    // nearbys
+    std::list<std::pair<KeyType, NodeType>> grids_cache_;  // voxel cache, 体素缓存
+    std::vector<KeyType> nearby_grids_;                    // nearbys ， 写死一个附近的三维数据grid
 };
 
 template <int dim, IVoxNodeType node_type, typename PointType>
@@ -129,12 +131,14 @@ bool IVox<dim, node_type, PointType>::GetClosestPoint(const PointType& pt, Point
     return true;
 }
 
+//主要用这个函数来搜索
 template <int dim, IVoxNodeType node_type, typename PointType>
 bool IVox<dim, node_type, PointType>::GetClosestPoint(const PointType& pt, PointVector& closest_pt, int max_num,
                                                       double max_range) {
+    //维护一个DistPoint的数组，大小为最多搜索的点 × 搜索的grid数量
     std::vector<DistPoint> candidates;
     candidates.reserve(max_num * nearby_grids_.size());
-
+    // 获取搜索点的voxel索引
     auto key = Pos2Grid(ToEigen<float, dim>(pt));
 
 // #define INNER_TIMER
@@ -145,7 +149,7 @@ bool IVox<dim, node_type, PointType>::GetClosestPoint(const PointType& pt, Point
         stats["nth"] = std::vector<int64_t>();
     }
 #endif
-
+    // 对所有的搜索grid进行一遍KNN
     for (const KeyType& delta : nearby_grids_) {
         auto dkey = key + delta;
         auto iter = grids_map_.find(dkey);
@@ -169,7 +173,7 @@ bool IVox<dim, node_type, PointType>::GetClosestPoint(const PointType& pt, Point
 #ifdef INNER_TIMER
     auto t1 = std::chrono::high_resolution_clock::now();
 #endif
-
+    //如果candidates的size大于max_num则要按照距离筛选
     if (candidates.size() <= max_num) {
     } else {
         std::nth_element(candidates.begin(), candidates.begin() + max_num - 1, candidates.end());
@@ -208,6 +212,7 @@ size_t IVox<dim, node_type, PointType>::NumValidGrids() const {
     return grids_map_.size();
 }
 
+//生成附近的grids，分别为6,18,26
 template <int dim, IVoxNodeType node_type, typename PointType>
 void IVox<dim, node_type, PointType>::GenerateNearbyGrids() {
     if (options_.nearby_type_ == NearbyType::CENTER) {
@@ -255,24 +260,29 @@ bool IVox<dim, node_type, PointType>::GetClosestPoint(const PointVector& cloud, 
 
 template <int dim, IVoxNodeType node_type, typename PointType>
 void IVox<dim, node_type, PointType>::AddPoints(const PointVector& points_to_add) {
+    //unseq用于指定并发运行，可能会加速？
     std::for_each(std::execution::unseq, points_to_add.begin(), points_to_add.end(), [this](const auto& pt) {
         auto key = Pos2Grid(ToEigen<float, dim>(pt));
 
         auto iter = grids_map_.find(key);
+        //如果新插入的点不在原先的voxel里，则构建一个新的key和对应的node
         if (iter == grids_map_.end()) {
             PointType center;
             center.getVector3fMap() = key.template cast<float>() * options_.resolution_;
-
+            //缓存添加新的voxel
             grids_cache_.push_front({key, NodeType(center, options_.resolution_)});
             grids_map_.insert({key, grids_cache_.begin()});
 
             grids_cache_.front().second.InsertPoint(pt);
-
+            //如果缓存大小达到阈值，那么就将back的key给删掉
+            //如果没有，则插入list顶端和unordered_map里
             if (grids_map_.size() >= options_.capacity_) {
                 grids_map_.erase(grids_cache_.back().first);
                 grids_cache_.pop_back();
             }
         } else {
+        //如果新插入的点在已有的voxel内，则将该node从原先的list里移动到list前面
+        //并更新key对应的位置
             iter->second->second.InsertPoint(pt);
             grids_cache_.splice(grids_cache_.begin(), grids_cache_, iter->second);
             grids_map_[key] = grids_cache_.begin();
@@ -280,6 +290,7 @@ void IVox<dim, node_type, PointType>::AddPoints(const PointVector& points_to_add
     });
 }
 
+//将三维点的xyz坐标/resolution，再round得到其在哪个三维空间voxel id上
 template <int dim, IVoxNodeType node_type, typename PointType>
 Eigen::Matrix<int, dim, 1> IVox<dim, node_type, PointType>::Pos2Grid(const IVox::PtType& pt) const {
     return (pt * options_.inv_resolution_).array().round().template cast<int>();

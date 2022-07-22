@@ -137,6 +137,7 @@ PointT IVoxNode<PointT, dim>::GetPoint(const std::size_t idx) const {
     return points_[idx];
 }
 
+//核心knn搜索函数
 template <typename PointT, int dim>
 int IVoxNode<PointT, dim>::KNNPointByCondition(std::vector<DistPoint>& dis_points, const PointT& point, const int& K,
                                                const double& max_range) {
@@ -159,6 +160,8 @@ int IVoxNode<PointT, dim>::KNNPointByCondition(std::vector<DistPoint>& dis_point
 #ifdef INNER_TIMER
         auto t1 = std::chrono::high_resolution_clock::now();
 #endif
+        //如果搜索点和候选voxel里的点距离小于阈值
+        //就将搜索距离加入数组内
         if (d < max_range * max_range) {
             dis_points.template emplace_back(DistPoint(d, this, &pt - points_.data()));
         }
